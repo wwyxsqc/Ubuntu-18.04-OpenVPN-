@@ -1,0 +1,113 @@
+
+sudo apt-get update
+sudo apt-get install openvpn easy-rsa
+make-cadir ~/openvpn-ca
+cd ~/openvpn-ca    打开
+ls
+vi vars    {nano}编辑器
+export KEY_CONFIG=删除这个符号$EASY_RSA/    删除成以下的样子
+export KEY_CONFIG=$EASY_RSA/     保存退出
+ls    检查文件
+openssl-1.0.0.cnf  复制
+vi vars 找到export KEY_CONFIG=$EASY_RSA/添加openssl-1.0.0.cnf           export KEY_CONFIG=$EASY_RSA/openssl-1.0.0.cnf
+找到改引号中的内容
+#set_var EASYRSA_REQ_COUNTRY    "US"
+#set_var EASYRSA_REQ_PROVINCE   "California"
+#set_var EASYRSA_REQ_CITY       "San Francisco"
+#set_var EASYRSA_REQ_ORG        "Copyleft Certificate Co"
+#set_var EASYRSA_REQ_EMAIL      "me@example.net"
+#set_var EASYRSA_REQ_OU         "My Organizational Unit"
+server   下面的修改成
+cd ~/openvpn-ca 
+source vars
+cd ..
+ls
+chown root .rnd      chown -R root:root .rnd   这里有点乱
+cd ~/openvpn-ca/
+source vars
+./clean-all
+./build-ca
+./build-key-server server
+openvpn --genkey --secret keys/ta.key
+cd ~/openvpn-ca
+source vars
+./build-key client1
+cd ~/openvpn-ca/
+cd keys
+sudo cp ca.crt server.crt server.key ta.key dh2048.pem /etc/openvpn
+gunzip -c /usr/share/doc/openvpn/examples/sample-config-files/server.conf.gz | sudo tee /etc/openvpn/server.conf
+sudo nano /etc/openvpn/server.conf
+查找tls-auth ta处下面添加
+key-direction 0
+修改下面的值
+cipher AES-128-CBC
+auth SHA256
+取消注释下面
+user nobody
+group nogroup
+push "redirect-gateway def1 bypass-dhcp"  取消注释
+push "dhcp-option DNS 208.67.222.222"     取消注释哦
+push "dhcp-option DNS 208.67.220.220"
+sudo nano /etc/sysctl.conf  
+net.ipv4.ip_forward=1     取消注释
+sudo sysctl -p
+ip route | grep default
+sudo nano /etc/ufw/before.rules
+添加
+# START OPENVPN RULES
+# NAT table rules
+*nat
+:POSTROUTING ACCEPT [0:0] 
+# Allow traffic from OpenVPN client to eth0 (change to the interface you discovered!)
+-A POSTROUTING -s 10.8.0.0/8 -o eth0 -j MASQUERADE
+COMMIT
+# END OPENVPN RULES
+
+sudo nano /etc/default/ufw
+DEFAULT_FORWARD_POLICY="ACCEPT"    修改为ACCEPT
+sudo ufw allow 1194/udp
+sudo ufw allow openSSH
+sudo ufw status verbose  如果无效输入 sudo ufw disable         sudo ufw enable
+sudo systemctl start openvpn@server
+sudo systemctl status openvpn@server
+ip addr show eth0
+sudo systemctl enable openvpn@server
+mkdir -p ~/client-configs/files
+cd ~/client-configs/files
+ls
+chmod 700 ~/client-configs/files
+cp /usr/share/doc/openvpn/examples/sample-config-files/client.conf ~/client-configs/base.conf
+nano ~/client-configs/base.conf
+user nobody     取消注释
+group nogroup     取消注释
+#ca ca.crt   取消注释
+#cert client.crt 取消注释
+#key client.key 取消注释
+cipher AES-128-CBC
+auth SHA256
+key-direction 1    添加
+nano ~/client-configs/make_config.sh
+添加下面
+#!/bin/bash
+
+# First argument: Client identifier
+
+KEY_DIR=~/client-configs/keys
+OUTPUT_DIR=~/client-configs/files
+BASE_CONFIG=~/client-configs/base.conf
+
+cat ${BASE_CONFIG} \
+    <(echo -e '<ca>') \
+    ${KEY_DIR}/ca.crt \
+    <(echo -e '</ca>\n<cert>') \
+    ${KEY_DIR}/${1}.crt \
+    <(echo -e '</cert>\n<key>') \
+    ${KEY_DIR}/${1}.key \
+    <(echo -e '</key>\n<tls-auth>') \
+    ${KEY_DIR}/ta.key \
+    <(echo -e '</tls-auth>') \
+    > ${OUTPUT_DIR}/${1}.ovpn
+chmod 700 ~/client-configs/make_config.sh
+cd ~/client-configs/
+./make_config.sh client1
+ls ~/client-configs/files
